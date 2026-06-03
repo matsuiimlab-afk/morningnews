@@ -22,19 +22,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Check RSS sources
-        run: |
-          echo "=== NHK RSS疎通確認 ==="
-          curl -s -o /dev/null -w "NHK主要: %{http_code}\n" "https://www3.nhk.or.jp/rss/news/cat0.xml"
-          curl -s -o /dev/null -w "NHK社会: %{http_code}\n" "https://www3.nhk.or.jp/rss/news/cat1.xml"
-          curl -s -o /dev/null -w "NHK経済: %{http_code}\n" "https://www3.nhk.or.jp/rss/news/cat3.xml"
-          curl -s -o /dev/null -w "NHK科学: %{http_code}\n" "https://www3.nhk.or.jp/rss/news/cat6.xml"
-          curl -s -o /dev/null -w "Gigazine: %{http_code}\n" "https://gigazine.net/news/rss_2.0/"
-          curl -s -o /dev/null -w "ITmedia: %{http_code}\n" "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml"
-          curl -s -o /dev/null -w "Zenn: %{http_code}\n" "https://zenn.dev/feed"
-          echo "=== NHK主要 先頭5件 ==="
-          curl -s -A "Mozilla/5.0" "https://www3.nhk.or.jp/rss/news/cat0.xml" | grep "<title>" | head -6
-
       - name: Run morning briefing
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
