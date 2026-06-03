@@ -1,2 +1,5 @@
 google-generativeai
 requests
+yfinance
+feedparser
+pytz
