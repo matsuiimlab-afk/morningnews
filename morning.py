@@ -30,7 +30,6 @@ def get_weather():
 
 # ── 2. 株価・為替・金────────────────────────────────────
 def get_market():
-    # 金以外のシンボル（ループで処理）
     symbols = {
         "NTT (9432)":        "9432.T",
         "SoftBank (9434)":   "9434.T",
@@ -39,8 +38,6 @@ def get_market():
         "USD/JPY":           "USDJPY=X",
     }
     lines = []
-
-    # USD/JPY は金換算でも使うので先に取得しておく
     usdjpy = None
 
     for label, sym in symbols.items():
@@ -64,27 +61,24 @@ def get_market():
         except Exception:
             lines.append(f"{label}: 取得エラー")
 
-    # 金価格: GC=F(USD/トロイオンス) × USDJPY ÷ 31.1035 = 円/g
+    # 金価格: GC=F(USD/oz) × USDJPY ÷ 31.1035 = 円/g
     try:
         gc_h = yf.Ticker("GC=F").history(period="2d")
-
-        # USD/JPY がまだ取れていない場合は再取得
         if usdjpy is None:
             fx_h = yf.Ticker("USDJPY=X").history(period="1d")
             usdjpy = fx_h["Close"].iloc[-1] if len(fx_h) >= 1 else 155.0
 
         if len(gc_h) >= 1:
-            gold_usd_oz  = gc_h["Close"].iloc[-1]          # USD/トロイオンス
-            gold_jpy_g   = gold_usd_oz * usdjpy / 31.1035  # 円/g
+            gold_usd_oz = gc_h["Close"].iloc[-1]
+            gold_jpy_g  = gold_usd_oz * usdjpy / 31.1035
 
             if len(gc_h) >= 2:
-                prev_usd   = gc_h["Close"].iloc[-2]
-                prev_jpy_g = prev_usd * usdjpy / 31.1035
+                prev_jpy_g = gc_h["Close"].iloc[-2] * usdjpy / 31.1035
                 pct   = (gold_jpy_g - prev_jpy_g) / prev_jpy_g * 100
                 arrow = "▲" if pct >= 0 else "▼"
                 lines.append(
                     f"金 (円/g): {gold_jpy_g:,.0f} {arrow}{abs(pct):.2f}%"
-                    f"  ※NY先物({gold_usd_oz:,.0f}USD/oz)×{usdjpy:.1f}÷31.1"
+                    f"  ※({gold_usd_oz:,.0f}USD/oz×{usdjpy:.1f}÷31.1)"
                 )
             else:
                 lines.append(f"金 (円/g): {gold_jpy_g:,.0f}")
@@ -116,7 +110,7 @@ def get_astronomy():
     url = "https://news.google.com/rss/search?q=%E5%AE%87%E5%AE%99+%E5%A4%A9%E6%96%87+NASA&hl=ja&gl=JP&ceid=JP:ja"
     return fetch_rss(url, 3)
 
-# ── 4. Gemini で整形（詳しく・背景込み）──────────────────
+# ── 4. Gemini で整形────────────────────────────────────
 def summarize_with_gemini(weather, market, news, ai_news, astro):
     prompt = f"""
 あなたは毎朝届く「個人向けモーニングブリーフィング」を作成するアシスタントです。
@@ -131,6 +125,7 @@ def summarize_with_gemini(weather, market, news, ai_news, astro):
 - 読んだ人が「なるほど、だから今日はこうしよう」と思えるような一言を添える
 - 絵文字で視認性を上げる（各セクション冒頭に1つ）
 - 全体2000文字以内、セクションは5つ（天気／マーケット／国内ニュース／AI動向／宇宙）
+- 国内ニュースとAI動向は渡した件数をすべて触れること（1件に絞らない）
 
 【日付】{today}
 
@@ -180,9 +175,14 @@ def main():
     market = get_market()
     print(f"マーケット:\n{market}")
 
-    news    = get_news()
+    news = get_news()
+    print(f"国内ニュース:\n{news}\n")
+
     ai_news = get_ai_news()
-    astro   = get_astronomy()
+    print(f"AI動向:\n{ai_news}\n")
+
+    astro = get_astronomy()
+    print(f"宇宙天文:\n{astro}\n")
 
     message = summarize_with_gemini(weather, market, news, ai_news, astro)
     print(f"--- 送信メッセージ ---\n{message}\n---")
