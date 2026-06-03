@@ -1,4 +1,5 @@
 import os
+import sys
 import requests
 import yfinance as yf
 import feedparser
@@ -22,13 +23,13 @@ def get_weather():
         r = requests.get(
             "https://wttr.in/Tokyo?format=%l:+%C+%t+%h湿度+%w風&m",
             timeout=10,
-            headers={"Accept-Language": "ja"}
+            headers={"User-Agent": "Mozilla/5.0"}
         )
         return r.text.strip()
     except Exception as e:
         return f"天気取得エラー: {e}"
 
-# ── 2. 株価・為替・金────────────────────────────────────
+# ── 2. 株価・為替（金価格なし）───────────────────────────
 def get_market():
     symbols = {
         "NTT (9432)":        "9432.T",
@@ -38,7 +39,6 @@ def get_market():
         "USD/JPY":           "USDJPY=X",
     }
     lines = []
-    usdjpy = None
 
     for label, sym in symbols.items():
         try:
@@ -51,104 +51,128 @@ def get_market():
                 pct   = diff / prev * 100
                 arrow = "▲" if diff >= 0 else "▼"
                 lines.append(f"{label}: {curr:,.2f} {arrow}{abs(pct):.2f}%")
-                if sym == "USDJPY=X":
-                    usdjpy = curr
             elif len(h) == 1:
                 curr = h["Close"].iloc[-1]
                 lines.append(f"{label}: {curr:,.2f}")
-                if sym == "USDJPY=X":
-                    usdjpy = curr
         except Exception:
             lines.append(f"{label}: 取得エラー")
 
-    # 金価格: GC=F(USD/oz) × USDJPY ÷ 31.1035 = 円/g
-    try:
-        gc_h = yf.Ticker("GC=F").history(period="2d")
-        if usdjpy is None:
-            fx_h = yf.Ticker("USDJPY=X").history(period="1d")
-            usdjpy = fx_h["Close"].iloc[-1] if len(fx_h) >= 1 else 155.0
-        if len(gc_h) >= 1:
-            gold_usd_oz = gc_h["Close"].iloc[-1]
-            gold_jpy_g  = gold_usd_oz * usdjpy / 31.1035
-            if len(gc_h) >= 2:
-                prev_jpy_g = gc_h["Close"].iloc[-2] * usdjpy / 31.1035
-                pct   = (gold_jpy_g - prev_jpy_g) / prev_jpy_g * 100
-                arrow = "▲" if pct >= 0 else "▼"
-                lines.append(
-                    f"金 (円/g): {gold_jpy_g:,.0f} {arrow}{abs(pct):.2f}%"
-                    f"  ※({gold_usd_oz:,.0f}USD/oz×{usdjpy:.1f}÷31.1)"
-                )
-            else:
-                lines.append(f"金 (円/g): {gold_jpy_g:,.0f}")
-        else:
-            lines.append("金 (円/g): 取得エラー")
-    except Exception as e:
-        lines.append(f"金 (円/g): 取得エラー ({e})")
-
     return "\n".join(lines)
 
-# ── 3. RSSニュース取得（汎用）────────────────────────────
-def fetch_rss(url, label="", max_items=8):
+# ── 3. RSS取得ユーティリティ──────────────────────────────
+def fetch_feed(url):
+    """URLからfeedparserオブジェクトを返す。失敗時はNone"""
     try:
-        feed = feedparser.parse(url)
-        items = [f"・{e.title}" for e in feed.entries[:max_items]]
-        print(f"  [{label}] {len(feed.entries)}件取得")
-        return "\n".join(items) if items else "記事なし"
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        return feedparser.parse(r.content)
     except Exception as e:
-        return f"RSS取得エラー: {e}"
+        print(f"  フィード取得失敗 {url}: {e}")
+        return None
 
+def entries_to_lines(entries, max_items=10, kw_filter=None):
+    """entriesリストから重複排除・キーワードフィルタ済みの行リストを返す"""
+    seen = set()
+    items = []
+    for e in entries:
+        title = e.title.strip()
+        if title in seen:
+            continue
+        if kw_filter and not any(k in title for k in kw_filter):
+            continue
+        seen.add(title)
+        items.append(f"・{title}")
+        if len(items) >= max_items:
+            break
+    return items
+
+# ── 4. 各カテゴリ取得──────────────────────────────────
 def get_news():
-    # 社会・事件・災害など主要ニュース（過去1日）
-    url = (
-        "https://news.google.com/rss/search"
-        "?q=日本+事件+OR+災害+OR+社会+OR+経済+OR+企業+when:1d"
-        "&hl=ja&gl=JP&ceid=JP:ja"
-    )
-    return fetch_rss(url, "国内ニュース")
+    f1 = fetch_feed("https://www3.nhk.or.jp/rss/news/cat0.xml")  # NHK主要
+    f2 = fetch_feed("https://www3.nhk.or.jp/rss/news/cat1.xml")  # NHK社会
+
+    entries = []
+    if f1: entries += f1.entries
+    if f2: entries += f2.entries
+
+    items = entries_to_lines(entries, max_items=10)
+    print(f"  [国内ニュース] {len(items)}件")
+    return "\n".join(items) if items else "記事なし"
 
 def get_ai_news():
-    # AI・LLM・生成AI関連（過去3日）
-    url = (
-        "https://news.google.com/rss/search"
-        "?q=生成AI+OR+LLM+OR+ChatGPT+OR+Claude+OR+Gemini+OR+OpenAI+OR+Anthropic+when:3d"
-        "&hl=ja&gl=JP&ceid=JP:ja"
-    )
-    return fetch_rss(url, "AI動向")
+    f1 = fetch_feed("https://rss.itmedia.co.jp/rss/2.0/aiplus.xml")  # ITmedia AI+
+    f2 = fetch_feed("https://gigazine.net/news/rss_2.0/")             # Gigazine
 
-def get_robotics():
-    # ロボット・自動化関連（過去7日）
-    url = (
-        "https://news.google.com/rss/search"
-        "?q=ロボット+OR+ヒューマノイド+OR+自動化+OR+Tesla+Optimus+when:7d"
-        "&hl=ja&gl=JP&ceid=JP:ja"
-    )
-    return fetch_rss(url, "ロボット", max_items=5)
+    kw = ["AI", "人工知能", "ChatGPT", "Claude", "Gemini", "OpenAI",
+          "Anthropic", "LLM", "生成AI", "機械学習", "深層学習"]
 
-def get_astronomy():
-    # 宇宙・天文（過去7日）
-    url = (
-        "https://news.google.com/rss/search"
-        "?q=宇宙+OR+天文+OR+NASA+OR+JAXA+OR+アルテミス+when:7d"
-        "&hl=ja&gl=JP&ceid=JP:ja"
-    )
-    return fetch_rss(url, "宇宙天文", max_items=4)
+    entries = []
+    if f1: entries += f1.entries        # ITmediaは全件対象（AI専門メディア）
+    if f2: entries += f2.entries        # GigazineはAIキーワードでフィルタ
 
-# ── 4. Gemini で整形────────────────────────────────────
+    # ITmediaはキーワードフィルタなし、Gigazineはキーワードフィルタあり
+    seen = set()
+    items = []
+    if f1:
+        for e in f1.entries:
+            title = e.title.strip()
+            if title not in seen:
+                seen.add(title)
+                items.append(f"・{title}")
+            if len(items) >= 5:
+                break
+    if f2:
+        for e in f2.entries:
+            title = e.title.strip()
+            if title in seen:
+                continue
+            if any(k in title for k in kw):
+                seen.add(title)
+                items.append(f"・{title}")
+            if len(items) >= 8:
+                break
+
+    print(f"  [AI動向] {len(items)}件")
+    return "\n".join(items) if items else "記事なし"
+
+def get_robotics_and_astronomy():
+    """NHK科学とGigazineを1回ずつ取得してロボット・宇宙に振り分け"""
+    f_nhk  = fetch_feed("https://www3.nhk.or.jp/rss/news/cat6.xml")
+    f_giga = fetch_feed("https://gigazine.net/news/rss_2.0/")
+
+    all_entries = []
+    if f_nhk:  all_entries += f_nhk.entries
+    if f_giga: all_entries += f_giga.entries
+
+    kw_robot = ["ロボット", "自動化", "自動運転", "ヒューマノイド",
+                "Optimus", "ドローン", "drone"]
+    kw_astro = ["宇宙", "天文", "NASA", "JAXA", "ロケット", "衛星",
+                "惑星", "恒星", "星雲", "銀河", "アルテミス", "探査"]
+
+    robot_items = entries_to_lines(all_entries, max_items=5, kw_filter=kw_robot)
+    astro_items = entries_to_lines(all_entries, max_items=4, kw_filter=kw_astro)
+
+    print(f"  [ロボット] {len(robot_items)}件 / [宇宙天文] {len(astro_items)}件")
+    robotics = "\n".join(robot_items) if robot_items else "目立った動きなし"
+    astro    = "\n".join(astro_items) if astro_items else "目立った動きなし"
+    return robotics, astro
+
+# ── 5. Gemini で整形────────────────────────────────────
 def summarize_with_gemini(weather, market, news, ai_news, robotics, astro):
     prompt = f"""
 あなたは毎朝届く「個人向けモーニングブリーフィング」を作成するアシスタントです。
 読者は東京・豊洲在住の個人投資家・フリーランサー（50代男性）です。
 興味：AI技術・宇宙・ロボット・株式投資・フリーランス税務
 
-以下の生データをもとに、**読んで実際に役立つ** LINEメッセージを作成してください。
+以下の生データをもとに、LINEメッセージを作成してください。
 
-【作成ルール】
-- 各セクションは「見出し＋数値/事実＋背景＋今日どう動くか」の構成
-- 単なる羅列で終わらせず、背景・理由・示唆を1文添える
-- 数字を必ず入れる（株価・気温・変動率など）
+【絶対ルール】
+- 渡したニュース見出しは**すべて1行ずつ**触れること。1件に絞って深掘りするのは禁止
+- 各ニュースは「タイトル要約 + なぜ重要か1文」の形式で箇条書き
+- 株価・気温など数字は必ず入れる
 - 絵文字で視認性UP（各セクション冒頭に1つ）
 - 全体2000文字以内、セクション6つ（天気／マーケット／国内ニュース／AI動向／ロボット／宇宙）
-- 各セクションのニュースは渡した件数すべてに触れる（1件に絞らない）
+- マーケットは「数値＋前日比＋一言コメント」形式
 
 【日付】{today}
 
@@ -158,7 +182,7 @@ def summarize_with_gemini(weather, market, news, ai_news, robotics, astro):
 【マーケット】
 {market}
 
-【国内ニュース（社会・経済・企業）】
+【国内ニュース（NHK）】
 {news}
 
 【AI動向】
@@ -174,8 +198,13 @@ def summarize_with_gemini(weather, market, news, ai_news, robotics, astro):
     response = model.generate_content(prompt)
     return response.text.strip()
 
-# ── 5. LINE送信────────────────────────────────────────
+# ── 6. LINE送信────────────────────────────────────────
 def send_line(text):
+    # LINEの1メッセージ上限は5000文字
+    MAX = 4800
+    if len(text) > MAX:
+        text = text[:MAX] + "\n\n…(以下省略)"
+
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Authorization": f"Bearer {LINE_TOKEN}",
@@ -188,7 +217,8 @@ def send_line(text):
     r = requests.post(url, headers=headers, json=payload)
     print(f"LINE status: {r.status_code}")
     if r.status_code != 200:
-        print(r.text)
+        print(f"LINE送信失敗: {r.text}")
+        sys.exit(1)
     return r.status_code
 
 # ── メイン────────────────────────────────────────────
@@ -202,10 +232,9 @@ def main():
     print(f"マーケット:\n{market}\n")
 
     print("RSS取得中...")
-    news     = get_news()
-    ai_news  = get_ai_news()
-    robotics = get_robotics()
-    astro    = get_astronomy()
+    news    = get_news()
+    ai_news = get_ai_news()
+    robotics, astro = get_robotics_and_astronomy()
 
     print(f"\n国内ニュース:\n{news}\n")
     print(f"AI動向:\n{ai_news}\n")
@@ -215,8 +244,8 @@ def main():
     message = summarize_with_gemini(weather, market, news, ai_news, robotics, astro)
     print(f"--- 送信メッセージ ---\n{message}\n---")
 
-    status = send_line(message)
-    print(f"完了 (status={status})")
+    send_line(message)
+    print("完了")
 
 if __name__ == "__main__":
     main()
