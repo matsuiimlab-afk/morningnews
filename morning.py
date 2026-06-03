@@ -67,11 +67,9 @@ def get_market():
         if usdjpy is None:
             fx_h = yf.Ticker("USDJPY=X").history(period="1d")
             usdjpy = fx_h["Close"].iloc[-1] if len(fx_h) >= 1 else 155.0
-
         if len(gc_h) >= 1:
             gold_usd_oz = gc_h["Close"].iloc[-1]
             gold_jpy_g  = gold_usd_oz * usdjpy / 31.1035
-
             if len(gc_h) >= 2:
                 prev_jpy_g = gc_h["Close"].iloc[-2] * usdjpy / 31.1035
                 pct   = (gold_jpy_g - prev_jpy_g) / prev_jpy_g * 100
@@ -90,58 +88,86 @@ def get_market():
     return "\n".join(lines)
 
 # ── 3. RSSニュース取得（汎用）────────────────────────────
-def fetch_rss(url, max_items=8):
+def fetch_rss(url, label="", max_items=8):
     try:
         feed = feedparser.parse(url)
-        items = [f"・{entry.title}" for entry in feed.entries[:max_items]]
+        items = [f"・{e.title}" for e in feed.entries[:max_items]]
+        print(f"  [{label}] {len(feed.entries)}件取得")
         return "\n".join(items) if items else "記事なし"
     except Exception as e:
         return f"RSS取得エラー: {e}"
 
 def get_news():
-    url = "https://news.google.com/rss/search?q=%E6%97%A5%E6%9C%AC+%E7%B5%8C%E6%B8%88+%E6%94%BF%E6%B2%BB&hl=ja&gl=JP&ceid=JP:ja"
-    return fetch_rss(url)
+    # 社会・事件・災害など主要ニュース（過去1日）
+    url = (
+        "https://news.google.com/rss/search"
+        "?q=日本+事件+OR+災害+OR+社会+OR+経済+OR+企業+when:1d"
+        "&hl=ja&gl=JP&ceid=JP:ja"
+    )
+    return fetch_rss(url, "国内ニュース")
 
 def get_ai_news():
-    url = "https://news.google.com/rss/search?q=AI+%E4%BA%BA%E5%B7%A5%E7%9F%A5%E8%83%BD+%E6%9C%80%E6%96%B0&hl=ja&gl=JP&ceid=JP:ja"
-    return fetch_rss(url)
+    # AI・LLM・生成AI関連（過去3日）
+    url = (
+        "https://news.google.com/rss/search"
+        "?q=生成AI+OR+LLM+OR+ChatGPT+OR+Claude+OR+Gemini+OR+OpenAI+OR+Anthropic+when:3d"
+        "&hl=ja&gl=JP&ceid=JP:ja"
+    )
+    return fetch_rss(url, "AI動向")
+
+def get_robotics():
+    # ロボット・自動化関連（過去7日）
+    url = (
+        "https://news.google.com/rss/search"
+        "?q=ロボット+OR+ヒューマノイド+OR+自動化+OR+Tesla+Optimus+when:7d"
+        "&hl=ja&gl=JP&ceid=JP:ja"
+    )
+    return fetch_rss(url, "ロボット", max_items=5)
 
 def get_astronomy():
-    url = "https://news.google.com/rss/search?q=%E5%AE%87%E5%AE%99+%E5%A4%A9%E6%96%87+NASA&hl=ja&gl=JP&ceid=JP:ja"
-    return fetch_rss(url, 3)
+    # 宇宙・天文（過去7日）
+    url = (
+        "https://news.google.com/rss/search"
+        "?q=宇宙+OR+天文+OR+NASA+OR+JAXA+OR+アルテミス+when:7d"
+        "&hl=ja&gl=JP&ceid=JP:ja"
+    )
+    return fetch_rss(url, "宇宙天文", max_items=4)
 
 # ── 4. Gemini で整形────────────────────────────────────
-def summarize_with_gemini(weather, market, news, ai_news, astro):
+def summarize_with_gemini(weather, market, news, ai_news, robotics, astro):
     prompt = f"""
 あなたは毎朝届く「個人向けモーニングブリーフィング」を作成するアシスタントです。
 読者は東京・豊洲在住の個人投資家・フリーランサー（50代男性）です。
+興味：AI技術・宇宙・ロボット・株式投資・フリーランス税務
 
 以下の生データをもとに、**読んで実際に役立つ** LINEメッセージを作成してください。
 
 【作成ルール】
-- 各セクションは「見出し＋数値/事実＋背景or理由＋今日どう動くか」の構成で書く
-- 単なる見出し羅列や「〜がありました」で終わらせない
-- 数字は必ず入れる（株価・気温・変動率など）
-- 読んだ人が「なるほど、だから今日はこうしよう」と思えるような一言を添える
-- 絵文字で視認性を上げる（各セクション冒頭に1つ）
-- 全体2000文字以内、セクションは5つ（天気／マーケット／国内ニュース／AI動向／宇宙）
-- 国内ニュースとAI動向は渡した件数をすべて触れること（1件に絞らない）
+- 各セクションは「見出し＋数値/事実＋背景＋今日どう動くか」の構成
+- 単なる羅列で終わらせず、背景・理由・示唆を1文添える
+- 数字を必ず入れる（株価・気温・変動率など）
+- 絵文字で視認性UP（各セクション冒頭に1つ）
+- 全体2000文字以内、セクション6つ（天気／マーケット／国内ニュース／AI動向／ロボット／宇宙）
+- 各セクションのニュースは渡した件数すべてに触れる（1件に絞らない）
 
 【日付】{today}
 
-【天気（生データ）】
+【天気】
 {weather}
 
-【マーケット（生データ）】
+【マーケット】
 {market}
 
-【国内ニュース（生データ）】
+【国内ニュース（社会・経済・企業）】
 {news}
 
-【AI動向（生データ）】
+【AI動向】
 {ai_news}
 
-【宇宙・天文（生データ）】
+【ロボット・自動化】
+{robotics}
+
+【宇宙・天文】
 {astro}
 """
     model = genai.GenerativeModel("gemini-2.5-flash")
@@ -173,18 +199,20 @@ def main():
     print(f"天気: {weather}")
 
     market = get_market()
-    print(f"マーケット:\n{market}")
+    print(f"マーケット:\n{market}\n")
 
-    news = get_news()
-    print(f"国内ニュース:\n{news}\n")
+    print("RSS取得中...")
+    news     = get_news()
+    ai_news  = get_ai_news()
+    robotics = get_robotics()
+    astro    = get_astronomy()
 
-    ai_news = get_ai_news()
+    print(f"\n国内ニュース:\n{news}\n")
     print(f"AI動向:\n{ai_news}\n")
-
-    astro = get_astronomy()
+    print(f"ロボット:\n{robotics}\n")
     print(f"宇宙天文:\n{astro}\n")
 
-    message = summarize_with_gemini(weather, market, news, ai_news, astro)
+    message = summarize_with_gemini(weather, market, news, ai_news, robotics, astro)
     print(f"--- 送信メッセージ ---\n{message}\n---")
 
     status = send_line(message)
