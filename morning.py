@@ -16,25 +16,30 @@ genai.configure(api_key=GEMINI_KEY)
 JST = pytz.timezone("Asia/Tokyo")
 today = datetime.now(JST).strftime("%Y年%m月%d日 (%a)")
 
-# ── 1. 天気（東京）────────────────────────────────────
+# ── 1. 天気（東京・摂氏）──────────────────────────────
 def get_weather():
     try:
-        r = requests.get("https://wttr.in/Tokyo?format=3", timeout=10)
+        # m=メートル法(℃), format=j1はJSON形式で取得
+        r = requests.get(
+            "https://wttr.in/Tokyo?format=%l:+%C+%t+%h湿度+%w風&m",
+            timeout=10,
+            headers={"Accept-Language": "ja"}
+        )
         return r.text.strip()
     except Exception as e:
         return f"天気取得エラー: {e}"
 
 # ── 2. 株価・為替・金────────────────────────────────────
 def get_market():
+    # 金以外のシンボル
     symbols = {
-        "NTT (9432)":       "9432.T",
-        "SoftBank (9434)":  "9434.T",
-        "SoftBank G (9984)":"9984.T",
-        "日経225":           "^N225",
-        "USD/JPY":          "USDJPY=X",
-        "金(円/g)":          "GC=F",   # USD建て→参考値
+        "NTT (9432)":        "9432.T",
+        "SoftBank (9434)":   "9434.T",
+        "日経225":            "^N225",
+        "USD/JPY":           "USDJPY=X",
     }
     lines = []
+
     for label, sym in symbols.items():
         try:
             t = yf.Ticker(sym)
@@ -49,17 +54,42 @@ def get_market():
             elif len(h) == 1:
                 curr = h["Close"].iloc[-1]
                 lines.append(f"{label}: {curr:,.2f}")
-        except Exception as e:
+        except Exception:
             lines.append(f"{label}: 取得エラー")
+
+    # 金価格: GC=F(USD/トロイオンス) → 円/g 換算
+    # 1トロイオンス = 31.1035g
+    try:
+        gc = yf.Ticker("GC=F")
+        fx = yf.Ticker("USDJPY=X")
+        gc_h = gc.history(period="2d")
+        fx_h = fx.history(period="2d")
+
+        if len(gc_h) >= 1 and len(fx_h) >= 1:
+            gold_usd_oz = gc_h["Close"].iloc[-1]   # USD/トロイオンス
+            usdjpy      = fx_h["Close"].iloc[-1]    # 円/USD
+            gold_jpy_g  = gold_usd_oz * usdjpy / 31.1035  # 円/g
+
+            if len(gc_h) >= 2:
+                prev_usd = gc_h["Close"].iloc[-2]
+                prev_jpy_g = prev_usd * usdjpy / 31.1035
+                pct  = (gold_jpy_g - prev_jpy_g) / prev_jpy_g * 100
+                arrow = "▲" if pct >= 0 else "▼"
+                lines.append(f"金 (円/g): {gold_jpy_g:,.0f} {arrow}{abs(pct):.2f}%")
+            else:
+                lines.append(f"金 (円/g): {gold_jpy_g:,.0f}")
+        else:
+            lines.append("金 (円/g): 取得エラー")
+    except Exception as e:
+        lines.append(f"金 (円/g): 取得エラー ({e})")
+
     return "\n".join(lines)
 
 # ── 3. RSSニュース取得（汎用）────────────────────────────
-def fetch_rss(url, max_items=4):
+def fetch_rss(url, max_items=10):
     try:
         feed = feedparser.parse(url)
-        items = []
-        for entry in feed.entries[:max_items]:
-            items.append(f"・{entry.title}")
+        items = [f"・{entry.title}" for entry in feed.entries[:max_items]]
         return "\n".join(items) if items else "記事なし"
     except Exception as e:
         return f"RSS取得エラー: {e}"
@@ -136,9 +166,9 @@ def main():
     market = get_market()
     print(f"マーケット:\n{market}")
 
-    news = get_news()
+    news    = get_news()
     ai_news = get_ai_news()
-    astro = get_astronomy()
+    astro   = get_astronomy()
 
     message = summarize_with_gemini(weather, market, news, ai_news, astro)
     print(f"--- 送信メッセージ ---\n{message}\n---")
