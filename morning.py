@@ -105,7 +105,7 @@ def summarize_with_gemini(weather, market, news, ai_news, astro):
 【宇宙・天文】
 {astro}
 """
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     response = model.generate_content(prompt)
     return response.text.strip()
 
